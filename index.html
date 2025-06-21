@@ -1,49 +1,12 @@
-<script type="text/javascript">
-        var gk_isXlsx = false;
-        var gk_xlsxFileLookup = {};
-        var gk_fileData = {};
-        function filledCell(cell) {
-          return cell !== '' && cell != null;
-        }
-        function loadFileData(filename) {
-        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
-            try {
-                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
-                var firstSheetName = workbook.SheetNames[0];
-                var worksheet = workbook.Sheets[firstSheetName];
-
-                // Convert sheet to JSON to filter blank rows
-                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                // Filter out blank rows (rows where all cells are empty, null, or undefined)
-                var filteredData = jsonData.filter(row => row.some(filledCell));
-
-                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
-                var headerRowIndex = filteredData.findIndex((row, index) =>
-                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
-                );
-                // Fallback
-                if (headerRowIndex === -1 || headerRowIndex > 25) {
-                  headerRowIndex = 0;
-                }
-
-                // Convert filtered JSON back to CSV
-                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
-                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
-                return csv;
-            } catch (e) {
-                console.error(e);
-                return "";
-            }
-        }
-        return gk_fileData[filename] || "";
-        }
-        </script><!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Collaborative Drawing</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.2/p5.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
     <style>
         body {
             margin: 0;
@@ -84,6 +47,9 @@
         input[type="range"] {
             width: 100px;
         }
+        #status {
+            color: red;
+        }
     </style>
 </head>
 <body>
@@ -94,9 +60,25 @@
         <button id="pencilTool" class="active">Pencil</button>
         <button id="brushTool">Brush</button>
         <button id="eraserTool">Eraser</button>
+        <span id="status">Connecting...</span>
     </div>
     <script>
-        let socket;
+        // Firebase configuration
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+            databaseURL: "https://YOUR_PROJECT_ID-default-rtdb.firebaseio.com",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_PROJECT_ID.appspot.com",
+            messagingSenderId: "YOUR_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+        const drawRef = database.ref('drawings');
+
         let currentTool = 'pencil';
         let brushColor;
         let brushSize = 5;
@@ -104,7 +86,10 @@
         function setup() {
             createCanvas(800, 600);
             background(255);
-            socket = new WebSocket('ws://localhost:8080');
+
+            const status = document.getElementById('status');
+            status.textContent = 'Connected';
+            status.style.color = 'green';
 
             brushColor = document.getElementById('colorPicker').value;
 
@@ -127,8 +112,9 @@
                 setTool('eraser');
             });
 
-            socket.onmessage = function(event) {
-                const data = JSON.parse(event.data);
+            // Listen for new drawing data
+            drawRef.on('child_added', (snapshot) => {
+                const data = snapshot.val();
                 if (data.tool === 'eraser') {
                     stroke(255);
                 } else {
@@ -141,7 +127,7 @@
                     strokeCap(SQUARE);
                 }
                 line(data.prevX, data.prevY, data.x, data.y);
-            };
+            });
         }
 
         function setTool(tool) {
@@ -169,11 +155,10 @@
                     y: mouseY,
                     color: color,
                     weight: brushSize,
-                    tool: currentTool
+                    tool: currentTool,
+                    timestamp: Date.now()
                 };
-                if (socket.readyState === WebSocket.OPEN) {
-                    socket.send(JSON.stringify(drawData));
-                }
+                drawRef.push(drawData);
             }
         }
     </script>
