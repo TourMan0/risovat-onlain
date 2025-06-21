@@ -1,0 +1,181 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Collaborative Drawing</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.2/p5.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f0f0f0;
+            font-family: Arial, sans-serif;
+        }
+        #toolbar {
+            background-color: #ddd;
+            padding: 10px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            width: 800px;
+            box-sizing: border-box;
+            margin-top: 10px;
+        }
+        canvas {
+            border: 1px solid black;
+            margin-top: 10px;
+        }
+        button {
+            padding: 5px 10px;
+            cursor: pointer;
+        }
+        button.active {
+            background-color: #aaa;
+        }
+        input[type="color"] {
+            width: 40px;
+            height: 30px;
+            padding: 0;
+            border: none;
+            cursor: pointer;
+        }
+        input[type="range"] {
+            width: 100px;
+        }
+    </style>
+</head>
+<body>
+    <div id="toolbar">
+        <input type="color" id="colorPicker" value="#000000" title="Choose color">
+        <input type="range" id="brushSize" min="1" max="50" value="5" title="Brush size">
+        <span id="sizeLabel">5</span>
+        <button id="pencilTool" class="active">Pencil</button>
+        <button id="brushTool">Brush</button>
+        <button id="eraserTool">Eraser</button>
+    </div>
+    <script>
+        let socket;
+        let currentTool = 'pencil';
+        let brushColor;
+        let brushSize = 5;
+
+        function setup() {
+            createCanvas(800, 600);
+            background(255);
+            socket = new WebSocket('ws://localhost:8080');
+
+            brushColor = document.getElementById('colorPicker').value;
+
+            document.getElementById('colorPicker').addEventListener('input', () => {
+                brushColor = document.getElementById('colorPicker').value;
+            });
+
+            document.getElementById('brushSize').addEventListener('input', () => {
+                brushSize = document.getElementById('brushSize').value;
+                document.getElementById('sizeLabel').textContent = brushSize;
+            });
+
+            document.getElementById('pencilTool').addEventListener('click', () => {
+                setTool('pencil');
+            });
+            document.getElementById('brushTool').addEventListener('click', () => {
+                setTool('brush');
+            });
+            document.getElementById('eraserTool').addEventListener('click', () => {
+                setTool('eraser');
+            });
+
+            socket.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                if (data.tool === 'eraser') {
+                    stroke(255);
+                } else {
+                    stroke(data.color);
+                }
+                strokeWeight(data.weight);
+                if (data.tool === 'brush') {
+                    strokeCap(ROUND);
+                } else {
+                    strokeCap(SQUARE);
+                }
+                line(data.prevX, data.prevY, data.x, data.y);
+            };
+        }
+
+        function setTool(tool) {
+            currentTool = tool;
+            document.querySelectorAll('#toolbar button').forEach(btn => btn.classList.remove('active'));
+            document.getElementById(`${tool}Tool`).classList.add('active');
+        }
+
+        function draw() {
+            if (mouseIsPressed && mouseX >= 0 && mouseX <= width && mouseY >= 0 && mouseY <= height) {
+                let color = currentTool === 'eraser' ? '#FFFFFF' : brushColor;
+                stroke(color);
+                strokeWeight(brushSize);
+                if (currentTool === 'brush') {
+                    strokeCap(ROUND);
+                } else {
+                    strokeCap(SQUARE);
+                }
+                line(pmouseX, pmouseY, mouseX, mouseY);
+
+                const drawData = {
+                    prevX: pmouseX,
+                    prevY: pmouseY,
+                    x: mouseX,
+                    y: mouseY,
+                    color: color,
+                    weight: brushSize,
+                    tool: currentTool
+                };
+                if (socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify(drawData));
+                }
+            }
+        }
+    </script>
+</body>
+</html>
